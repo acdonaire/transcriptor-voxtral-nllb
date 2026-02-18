@@ -1,0 +1,7 @@
+FROM vllm/vllm-openai:nightly
+
+RUN pip install --no-cache-dir \
+    soundfile \
+    librosa \
+    soxr \
+    "mistral-common[soundfile]>=1.9.0"

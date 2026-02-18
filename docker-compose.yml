@@ -1,6 +1,8 @@
 services:
   vllm-voxtral:
-    image: vllm/vllm-openai:nightly
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm
     container_name: vllm-voxtral
     deploy:
       resources:
@@ -16,7 +18,18 @@ services:
       - huggingface_cache:/root/.cache/huggingface
     ports:
       - "8000:8000"
-    command: ["--model", "mistralai/Voxtral-Mini-4B-Realtime-2602", "--host", "0.0.0.0", "--port", "8000", "--max-model-len", "32768", "--gpu-memory-utilization", "0.7"]
+    command:
+      - "mistralai/Voxtral-Mini-4B-Realtime-2602"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--max-model-len"
+      - "32768"
+      - "--gpu-memory-utilization"
+      - "0.7"
+      - "--compilation-config"
+      - '{"cudagraph_mode":"PIECEWISE"}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
