@@ -1,0 +1,116 @@
+# =============================================================================
+# Docker Compose para Voxtral + NLLB
+# Transcripción en tiempo real + Traducción
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # =========================================================================
+  # Servicio 1: vLLM con Voxtral-Mini-4B para transcripción
+  # =========================================================================
+  vllm-voxtral:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-voxtral
+    runtime: nvidia
+    
+    # Recursos GPU - ajustar según disponibilidad
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    environment:
+      - VLLM_DISABLE_COMPILE_CACHE=1
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    
+    volumes:
+      # Cache de modelos persistente
+      - huggingface_cache:/root/.cache/huggingface
+    
+    ports:
+      - "8000:8000"
+    
+    command: >
+      vllm serve mistralai/Voxtral-Mini-4B-Realtime-2602
+      --host 0.0.0.0
+      --port 8000
+      --compilation_config '{"cudagraph_mode": "PIECEWISE"}'
+      --max-model-len 32768
+      --gpu-memory-utilization 0.7
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s  # Dar tiempo para cargar el modelo
+    
+    restart: unless-stopped
+    
+    networks:
+      - transcription-net
+
+  # =========================================================================
+  # Servicio 2: Gradio App con NLLB para traducción
+  # =========================================================================
+  gradio-app:
+    build:
+      context: ./gradio-app
+      dockerfile: Dockerfile
+    container_name: gradio-nllb
+    runtime: nvidia
+    
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    environment:
+      - VLLM_HOST=vllm-voxtral  # Nombre del servicio en la red Docker
+      - VLLM_PORT=8000
+      - HF_HOME=/root/.cache/huggingface
+      - NVIDIA_VISIBLE_DEVICES=all
+    
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    
+    ports:
+      - "7860:7860"
+    
+    depends_on:
+      vllm-voxtral:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    
+    restart: unless-stopped
+    
+    networks:
+      - transcription-net
+
+# =============================================================================
+# Volúmenes compartidos
+# =============================================================================
+volumes:
+  huggingface_cache:
+    driver: local
+
+# =============================================================================
+# Red interna
+# =============================================================================
+networks:
+  transcription-net:
+    driver: bridge

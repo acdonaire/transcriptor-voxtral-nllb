@@ -1,0 +1,24 @@
+# =============================================================================
+# Requirements para Gradio App + NLLB
+# =============================================================================
+
+# UI Framework
+gradio>=4.44.0
+
+# Transformers y ML
+transformers>=4.40.0
+torch>=2.0.0
+accelerate>=0.27.0
+sentencepiece>=0.2.0
+
+# Audio processing
+numpy>=1.24.0
+soxr>=0.3.7
+soundfile>=0.12.1
+librosa>=0.10.0
+
+# WebSocket para comunicación con vLLM
+websockets>=12.0
+
+# Utilidades
+requests>=2.31.0
