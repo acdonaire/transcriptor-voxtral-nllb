@@ -1,4 +1,4 @@
-import os, asyncio, base64, json, queue, threading
+import os, asyncio, base64, json, queue, threading, time
 import gradio as gr
 import numpy as np
 import websockets
@@ -10,6 +10,10 @@ NLLB_HOST = os.environ.get("NLLB_HOST", "localhost")
 NLLB_PORT = os.environ.get("NLLB_PORT", "8001")
 SAMPLE_RATE = 16_000
 MODEL = "mistralai/Voxtral-Mini-4B-Realtime-2602"
+
+# Buffer config
+DEBOUNCE_SECONDS = 1.5
+MIN_NEW_CHARS = 10
 
 LANGUAGES = {
     "Inglés": "en",
@@ -31,6 +35,11 @@ transcription_text = ""
 detected_language = "es"
 is_running = False
 
+# Buffer state
+last_translation_time = 0
+last_translated_text = ""
+current_translation = ""
+
 def translate_text(text, src="es", tgt="en"):
     if not text.strip() or src == tgt:
         return text if src == tgt else ""
@@ -40,6 +49,30 @@ def translate_text(text, src="es", tgt="en"):
     except Exception as e:
         print(f"Translation error: {e}")
         return ""
+
+def should_translate(current_text):
+    """Decide si debemos traducir basado en debounce y cambio mínimo."""
+    global last_translation_time, last_translated_text
+    
+    now = time.time()
+    time_since_last = now - last_translation_time
+    new_chars = len(current_text) - len(last_translated_text)
+    
+    # Traducir si: pasó suficiente tiempo Y hay suficiente texto nuevo
+    if time_since_last >= DEBOUNCE_SECONDS and new_chars >= MIN_NEW_CHARS:
+        return True
+    return False
+
+def update_translation(text, src, tgt):
+    """Actualiza la traducción si cumple condiciones del buffer."""
+    global last_translation_time, last_translated_text, current_translation
+    
+    if should_translate(text):
+        current_translation = translate_text(text, src, tgt)
+        last_translation_time = time.time()
+        last_translated_text = text
+    
+    return current_translation
 
 async def ws_handler():
     global transcription_text, is_running, detected_language
@@ -110,25 +143,54 @@ def process_audio(audio, trans, trad, lang, target_lang):
     
     t, l = transcription_text, detected_language
     tgt = LANGUAGES.get(target_lang, "en")
-    return t, translate_text(t, l, tgt) if t.strip() else "", f"Idioma: {l}"
+    
+    # Usar buffer para traducción
+    translation = update_translation(t, l, tgt) if t.strip() else ""
+    
+    return t, translation, f"Idioma: {l}"
 
 def start():
     global is_running, transcription_text, detected_language
-    if is_running:
-        return "Ya grabando...", "", "", "Idioma: es"
-    is_running, transcription_text, detected_language = True, "", "es"
-    threading.Thread(target=run_ws, daemon=True).start()
-    return "🎤 Grabando...", "", "", "Idioma: es"
-
-def stop(target_lang):
-    global is_running, transcription_text, detected_language
-    is_running = False
+    global last_translation_time, last_translated_text, current_translation
+    
+    # Limpiar todo al iniciar
+    is_running = False  # Parar cualquier grabación anterior
+    time.sleep(0.1)
+    
+    # Limpiar cola de audio
     while not audio_queue.empty():
         try: audio_queue.get_nowait()
         except: break
+    
+    # Reset estado
+    transcription_text = ""
+    detected_language = "es"
+    last_translation_time = 0
+    last_translated_text = ""
+    current_translation = ""
+    
+    # Iniciar nueva grabación
+    is_running = True
+    threading.Thread(target=run_ws, daemon=True).start()
+    
+    return "🎤 Grabando...", "", "", "Idioma: es"
+
+def stop(target_lang):
+    global is_running, transcription_text, detected_language, current_translation
+    is_running = False
+    
+    while not audio_queue.empty():
+        try: audio_queue.get_nowait()
+        except: break
+    
     t, l = transcription_text, detected_language
     tgt = LANGUAGES.get(target_lang, "en")
-    return f"✅ Detenido ({l})", t, translate_text(t, l, tgt) if t else "", f"Idioma: {l}"
+    
+    # Traducción final completa
+    final_translation = translate_text(t, l, tgt) if t else ""
+    current_translation = final_translation
+    
+    return f"✅ Detenido ({l})", t, final_translation, f"Idioma: {l}"
 
 with gr.Blocks(title="Transcripción + Traducción") as demo:
     gr.Markdown("# 🎤 Transcripción y Traducción en Tiempo Real\n**Voxtral + NLLB**\n---")
@@ -156,4 +218,5 @@ with gr.Blocks(title="Transcripción + Traducción") as demo:
 if __name__ == "__main__":
     print(f"VLLM: ws://{VLLM_HOST}:{VLLM_PORT}/v1/realtime")
     print(f"NLLB: http://{NLLB_HOST}:{NLLB_PORT}/translate")
+    print(f"Buffer: {DEBOUNCE_SECONDS}s debounce, {MIN_NEW_CHARS} chars min")
     demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
