@@ -27,7 +27,7 @@ services:
       - "--max-model-len"
       - "32768"
       - "--gpu-memory-utilization"
-      - "0.7"
+      - "0.5"
       - "--compilation-config"
       - '{"cudagraph_mode":"PIECEWISE"}'
     healthcheck:
@@ -35,14 +35,15 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 180s
+      start_period: 300s
     restart: unless-stopped
     networks:
       - transcription-net
 
-  gradio-app:
-    image: transcriptor-voxtral-nllb-gradio-app:latest
-    container_name: gradio-nllb
+  nllb-api:
+    build:
+      context: ./nllb-api
+    container_name: nllb-api
     deploy:
       resources:
         reservations:
@@ -51,16 +52,35 @@ services:
               count: 1
               capabilities: [gpu]
     environment:
-      - VLLM_HOST=vllm-voxtral
-      - VLLM_PORT=8000
       - HF_HOME=/root/.cache/huggingface
     volumes:
       - huggingface_cache:/root/.cache/huggingface
     ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+    networks:
+      - transcription-net
+
+  gradio-app:
+    build:
+      context: ./gradio-app
+    container_name: gradio-app
+    environment:
+      - VLLM_HOST=vllm-voxtral
+      - VLLM_PORT=8000
+      - NLLB_HOST=nllb-api
+      - NLLB_PORT=8001
+    ports:
       - "7860:7860"
     depends_on:
-      vllm-voxtral:
-        condition: service_healthy
+      - vllm-voxtral
+      - nllb-api
     restart: unless-stopped
     networks:
       - transcription-net
