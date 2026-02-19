@@ -9,6 +9,7 @@ VLLM_PORT = os.environ.get("VLLM_PORT", "8000")
 NLLB_HOST = os.environ.get("NLLB_HOST", "localhost")
 NLLB_PORT = os.environ.get("NLLB_PORT", "8001")
 SAMPLE_RATE = 16_000
+MODEL = "mistralai/Voxtral-Mini-4B-Realtime-2602"
 
 audio_queue = queue.Queue()
 transcription_text = ""
@@ -21,16 +22,21 @@ def translate_text(text, src="es", tgt="en"):
     try:
         r = httpx.post(f"http://{NLLB_HOST}:{NLLB_PORT}/translate", json={"text": text, "source_lang": src, "target_lang": tgt}, timeout=30)
         return r.json().get("translation", "") if r.status_code == 200 else ""
-    except:
+    except Exception as e:
+        print(f"Translation error: {e}")
         return ""
 
 async def ws_handler():
     global transcription_text, is_running, detected_language
+    ws_url = f"ws://{VLLM_HOST}:{VLLM_PORT}/v1/realtime"
+    print(f"Conectando a {ws_url}...")
     try:
-        async with websockets.connect(f"ws://{VLLM_HOST}:{VLLM_PORT}/v1/realtime") as ws:
+        async with websockets.connect(ws_url) as ws:
             await ws.recv()
-            await ws.send(json.dumps({"type": "session.update", "model": "mistralai/Voxtral-Mini-4B-Realtime-2602"}))
+            await ws.send(json.dumps({"type": "session.update", "model": MODEL}))
             await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+            print("Sesión WebSocket iniciada")
+            
             async def send():
                 while is_running:
                     try:
@@ -40,20 +46,22 @@ async def ws_handler():
                         continue
                     except:
                         break
+            
             async def recv():
                 global transcription_text, detected_language
-                while is_running:
-                    try:
-                        r = json.loads(await asyncio.wait_for(ws.recv(), timeout=0.5))
-                        if r.get("type") == "transcription.delta":
-                            transcription_text += r.get("delta", "")
-                            detected_language = r.get("language", detected_language)
-                        elif r.get("type") == "transcription.done":
-                            transcription_text = r.get("text", transcription_text)
-                    except asyncio.TimeoutError:
-                        continue
-                    except:
+                async for message in ws:
+                    if not is_running:
                         break
+                    data = json.loads(message)
+                    msg_type = data.get("type")
+                    print(f"Recibido: {msg_type}")
+                    if msg_type == "transcription.delta":
+                        transcription_text += data.get("delta", "")
+                        detected_language = data.get("language", detected_language)
+                        print(f"Delta: {data.get('delta', '')}")
+                    elif msg_type == "transcription.done":
+                        transcription_text = data.get("text", transcription_text)
+            
             await asyncio.gather(send(), recv())
     except Exception as e:
         print(f"WS error: {e}")
@@ -63,21 +71,34 @@ def run_ws():
 
 def process_audio(audio, trans, trad, lang):
     global is_running, transcription_text, detected_language
-    if audio is None:
+    if audio is None or not is_running:
         return trans, trad, lang
+    
     sr, arr = audio
+    
+    # Convertir a mono
     if len(arr.shape) > 1:
         arr = arr.mean(axis=1)
+    
+    # Normalizar a float
+    if arr.dtype == np.int16:
+        audio_float = arr.astype(np.float32) / 32767.0
+    else:
+        audio_float = arr.astype(np.float32)
+    
+    # Resamplear a 16kHz
     if sr != SAMPLE_RATE:
-        try:
-            import soxr
-            arr = soxr.resample(arr.astype(np.float32), sr, SAMPLE_RATE)
-        except:
-            arr = np.interp(np.linspace(0, len(arr), int(len(arr)*SAMPLE_RATE/sr)), np.arange(len(arr)), arr)
-    if arr.dtype in [np.float32, np.float64]:
-        arr = (arr * 32767).astype(np.int16)
-    if is_running:
-        audio_queue.put(base64.b64encode(arr.tobytes()).decode())
+        num_samples = int(len(audio_float) * SAMPLE_RATE / sr)
+        audio_float = np.interp(
+            np.linspace(0, len(audio_float) - 1, num_samples),
+            np.arange(len(audio_float)),
+            audio_float
+        )
+    
+    # Convertir a PCM16 y base64
+    pcm16 = (audio_float * 32767).astype(np.int16)
+    audio_queue.put(base64.b64encode(pcm16.tobytes()).decode())
+    
     t, l = transcription_text, detected_language
     return t, translate_text(t, l, "en") if t.strip() else "", f"Idioma: {l}"
 
@@ -116,4 +137,6 @@ with gr.Blocks(title="Transcripción + Traducción") as demo:
     audio_input.stream(process_audio, [audio_input, trans_out, trad_out, lang_display], [trans_out, trad_out, lang_display])
 
 if __name__ == "__main__":
+    print(f"VLLM: ws://{VLLM_HOST}:{VLLM_PORT}/v1/realtime")
+    print(f"NLLB: http://{NLLB_HOST}:{NLLB_PORT}/translate")
     demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
