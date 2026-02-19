@@ -116,4 +116,4 @@ with gr.Blocks(title="Transcripción + Traducción") as demo:
     audio_input.stream(process_audio, [audio_input, trans_out, trad_out, lang_display], [trans_out, trad_out, lang_display])
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
