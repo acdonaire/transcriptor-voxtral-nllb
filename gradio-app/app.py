@@ -14,6 +14,7 @@ MODEL = "mistralai/Voxtral-Mini-4B-Realtime-2602"
 # Buffer config
 DEBOUNCE_SECONDS = 1.5
 MIN_NEW_CHARS = 10
+MAX_WAIT_SECONDS = 3.0  # Traducir aunque no haya nuevos chars si pasa este tiempo
 
 LANGUAGES = {
     "Inglés": "en",
@@ -51,20 +52,23 @@ def translate_text(text, src="es", tgt="en"):
         return ""
 
 def should_translate(current_text):
-    """Decide si debemos traducir basado en debounce y cambio mínimo."""
     global last_translation_time, last_translated_text
     
     now = time.time()
     time_since_last = now - last_translation_time
     new_chars = len(current_text) - len(last_translated_text)
+    text_pending = current_text != last_translated_text
     
-    # Traducir si: pasó suficiente tiempo Y hay suficiente texto nuevo
+    # Traducir si:
+    # 1. Pasó debounce Y hay suficientes chars nuevos, O
+    # 2. Pasó max_wait Y hay texto pendiente sin traducir
     if time_since_last >= DEBOUNCE_SECONDS and new_chars >= MIN_NEW_CHARS:
+        return True
+    if time_since_last >= MAX_WAIT_SECONDS and text_pending:
         return True
     return False
 
 def update_translation(text, src, tgt):
-    """Actualiza la traducción si cumple condiciones del buffer."""
     global last_translation_time, last_translated_text, current_translation
     
     if should_translate(text):
@@ -117,8 +121,14 @@ def run_ws():
 
 def process_audio(audio, trans, trad, lang, target_lang):
     global is_running, transcription_text, detected_language
+    
+    # Siempre actualizar traducción si hay texto pendiente (incluso sin audio nuevo)
+    t, l = transcription_text, detected_language
+    tgt = LANGUAGES.get(target_lang, "en")
+    translation = update_translation(t, l, tgt) if t.strip() else ""
+    
     if audio is None or not is_running:
-        return trans, trad, lang
+        return t, translation, f"Idioma: {l}"
     
     sr, arr = audio
     
@@ -141,35 +151,25 @@ def process_audio(audio, trans, trad, lang, target_lang):
     pcm16 = (audio_float * 32767).astype(np.int16)
     audio_queue.put(base64.b64encode(pcm16.tobytes()).decode())
     
-    t, l = transcription_text, detected_language
-    tgt = LANGUAGES.get(target_lang, "en")
-    
-    # Usar buffer para traducción
-    translation = update_translation(t, l, tgt) if t.strip() else ""
-    
     return t, translation, f"Idioma: {l}"
 
 def start():
     global is_running, transcription_text, detected_language
     global last_translation_time, last_translated_text, current_translation
     
-    # Limpiar todo al iniciar
-    is_running = False  # Parar cualquier grabación anterior
+    is_running = False
     time.sleep(0.1)
     
-    # Limpiar cola de audio
     while not audio_queue.empty():
         try: audio_queue.get_nowait()
         except: break
     
-    # Reset estado
     transcription_text = ""
     detected_language = "es"
     last_translation_time = 0
     last_translated_text = ""
     current_translation = ""
     
-    # Iniciar nueva grabación
     is_running = True
     threading.Thread(target=run_ws, daemon=True).start()
     
@@ -186,7 +186,6 @@ def stop(target_lang):
     t, l = transcription_text, detected_language
     tgt = LANGUAGES.get(target_lang, "en")
     
-    # Traducción final completa
     final_translation = translate_text(t, l, tgt) if t else ""
     current_translation = final_translation
     
@@ -218,5 +217,5 @@ with gr.Blocks(title="Transcripción + Traducción") as demo:
 if __name__ == "__main__":
     print(f"VLLM: ws://{VLLM_HOST}:{VLLM_PORT}/v1/realtime")
     print(f"NLLB: http://{NLLB_HOST}:{NLLB_PORT}/translate")
-    print(f"Buffer: {DEBOUNCE_SECONDS}s debounce, {MIN_NEW_CHARS} chars min")
+    print(f"Buffer: {DEBOUNCE_SECONDS}s debounce, {MIN_NEW_CHARS} chars min, {MAX_WAIT_SECONDS}s max wait")
     demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
