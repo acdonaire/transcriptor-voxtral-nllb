@@ -1,196 +1,128 @@
-# 🎤 Voxtral + NLLB: Transcripción y Traducción en Tiempo Real
+# Transcriptor Voxtral + NLLB
 
-Sistema de transcripción de voz en tiempo real con traducción automática, diseñado para workshops de IA.
+Sistema de transcripción en tiempo real con traducción automática.
 
-## 📋 Descripción
+## Modelos
 
-Esta aplicación combina dos modelos de IA:
+- **Transcripción**: Voxtral-Mini-4B-Realtime (Mistral AI) - 4.4B parámetros, ~16GB VRAM
+- **Traducción**: NLLB-200-distilled-600M (Meta) - 600M parámetros, ~3GB VRAM
 
-| Modelo | Función | Parámetros | VRAM |
-|--------|---------|------------|------|
-| **Voxtral-Mini-4B-Realtime** | Transcripción en tiempo real | 4.4B | ~16GB |
-| **NLLB-200-distilled-600M** | Traducción a inglés | 600M | ~3GB |
+## Servicios
 
-### Características
+El sistema se compone de 3 contenedores independientes:
 
-- ✅ Transcripción en tiempo real con latencia <500ms
-- ✅ Detección automática de idioma
-- ✅ Soporte para 13 idiomas (transcripción)
-- ✅ Traducción a inglés desde 200+ idiomas
-- ✅ Interfaz web con Gradio
-- ✅ API WebSocket compatible con vLLM Realtime
+- **vllm-voxtral** (puerto 8000): Servidor vLLM con Voxtral para transcripción en tiempo real via WebSocket
+- **nllb-api** (puerto 8001): API REST FastAPI para traducción con NLLB-200
+- **gradio-app** (puerto 7860): Interfaz web con micrófono
 
-## 🔧 Requisitos de Hardware
+## Idiomas soportados
 
-| Componente | Mínimo | Recomendado |
-|------------|--------|-------------|
-| GPU | A10 24GB | A100 40GB/80GB |
-| RAM | 16GB | 32GB |
-| Disco | 50GB | 100GB (para cache) |
+**Transcripción (Voxtral):** Español, Inglés, Francés, Alemán, Italiano, Portugués, Holandés, Ruso, Chino, Japonés, Coreano, Árabe, Hindi
 
-## 🚀 Despliegue en Verda Cloud
+**Traducción (NLLB):** 200+ idiomas. Configurados en la app: Inglés, Español, Francés, Alemán, Italiano, Portugués, Holandés, Ruso, Chino, Japonés, Coreano, Árabe
 
-### Opción 1: Contenedor Unificado (Recomendado)
+## Requisitos
 
-1. **Crear instancia en Verda:**
-   - GPU: A100 40GB o superior
-   - Imagen base: `vllm/vllm-openai:latest`
-   - Puertos expuestos: `7860`, `8000`
+- GPU con mínimo 24GB VRAM (recomendado: L40S 48GB)
+- Docker con soporte NVIDIA
+- ~20GB espacio en disco
 
-2. **Clonar repositorio:**
-   ```bash
-   git clone https://github.com/acdonaire/transcriptor-voxtral-nllb.git
-   cd transcriptor-voxtral-nllb
-   ```
-
-3. **Construir y ejecutar:**
-   ```bash
-   docker build -t voxtral-nllb:latest .
-   docker run --gpus all -p 7860:7860 -p 8000:8000 voxtral-nllb:latest
-   ```
-
-### Opción 2: Docker Compose (dos contenedores)
-
+## Instalación
 ```bash
-docker-compose up -d
+git clone https://github.com/acdonaire/transcriptor-voxtral-nllb.git
+cd transcriptor-voxtral-nllb
 ```
 
-### Opción 3: Ejecución directa en Verda
+## Uso
 
-Si usas una instancia con vLLM preinstalado:
-
+Iniciar servicios en orden:
 ```bash
-# Terminal 1: Iniciar vLLM
-VLLM_DISABLE_COMPILE_CACHE=1 vllm serve mistralai/Voxtral-Mini-4B-Realtime-2602 \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --compilation_config '{"cudagraph_mode": "PIECEWISE"}' \
-    --max-model-len 32768
+# 1. Voxtral (esperar a "Application startup complete")
+docker compose up -d vllm-voxtral
+docker logs -f vllm-voxtral
 
-# Terminal 2: Iniciar Gradio (después de que vLLM esté listo)
-pip install gradio transformers websockets soxr
-python gradio-app/app.py
+# 2. NLLB (esperar a "NLLB cargado en cuda")
+docker compose up -d nllb-api
+docker logs -f nllb-api
+
+# 3. Gradio
+docker compose up -d gradio-app
+docker logs -f gradio-app
 ```
 
-## 📁 Estructura del Proyecto
+Acceder a la interfaz en `http://<IP>:7860`
 
-```
-voxtral-nllb-verda/
-├── Dockerfile              # Imagen unificada
-├── docker-compose.yml      # Orquestación de 2 contenedores
-├── supervisord.conf        # Gestión de procesos
-├── start.sh               # Script de inicio manual
-├── README.md              # Este archivo
-├── vllm-voxtral/
-│   └── Dockerfile         # Solo vLLM + Voxtral
-└── gradio-app/
-    ├── Dockerfile         # Solo Gradio + NLLB
-    ├── app.py            # Aplicación principal
-    └── requirements.txt   # Dependencias Python
-```
+## Tests individuales
 
-## 🌐 Acceso a la Aplicación
-
-Una vez desplegado:
-
-- **Interfaz Gradio**: `http://<IP_VERDA>:7860`
-- **API vLLM**: `http://<IP_VERDA>:8000`
-- **WebSocket Realtime**: `ws://<IP_VERDA>:8000/v1/realtime`
-
-## 📖 Uso
-
-1. Abre la interfaz Gradio en tu navegador
-2. Haz clic en **🎤 Iniciar**
-3. Permite el acceso al micrófono
-4. Habla en cualquier idioma soportado
-5. La transcripción aparece en tiempo real
-6. La traducción al inglés se genera automáticamente
-7. Haz clic en **⏹️ Detener** cuando termines
-
-## 🌍 Idiomas Soportados
-
-### Transcripción (Voxtral)
-Español, Inglés, Francés, Alemán, Italiano, Portugués, Holandés, Ruso, Chino, Japonés, Coreano, Árabe, Hindi
-
-### Traducción (NLLB)
-200+ idiomas incluyendo todos los anteriores y muchos más
-
-## ⚙️ Configuración Avanzada
-
-### Variables de Entorno
-
-| Variable | Descripción | Default |
-|----------|-------------|---------|
-| `VLLM_HOST` | Host del servidor vLLM | `localhost` |
-| `VLLM_PORT` | Puerto del servidor vLLM | `8000` |
-| `GRADIO_PORT` | Puerto de la interfaz Gradio | `7860` |
-| `HF_TOKEN` | Token de HuggingFace (opcional) | - |
-
-### Ajustes de VRAM
-
-Para GPUs con menos memoria, ajusta `--gpu-memory-utilization`:
-
+Para probar cada servicio por separado:
 ```bash
-# Para A10 24GB
---gpu-memory-utilization 0.85
+# Instalar dependencias
+pip3 install gradio websockets numpy httpx --break-system-packages
 
-# Para A100 40GB
---gpu-memory-utilization 0.70
+# Test Voxtral (transcripción)
+python3 test_realtime.py
 
-# Para A100 80GB
---gpu-memory-utilization 0.50
+# Test NLLB (traducción)
+python3 test_nllb.py
 ```
 
-### Ajuste de Latencia
-
-El delay de transcripción se puede configurar (480ms es el sweet spot):
-
+## API NLLB
 ```bash
-# En params.json del modelo
-"transcription_delay_ms": 480  # 80ms a 2400ms
+curl -X POST http://localhost:8001/translate \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hola mundo","source_lang":"es","target_lang":"en"}'
 ```
 
-## 🐛 Solución de Problemas
-
-### vLLM no inicia
-```bash
-# Verificar GPU disponible
-nvidia-smi
-
-# Probar con modo eager
-vllm serve ... --enforce-eager
+Respuesta:
+```json
+{"translation":"Hello world","source_lang":"es","target_lang":"en"}
 ```
 
-### WebSocket no conecta
-```bash
-# Verificar que vLLM esté corriendo
-curl http://localhost:8000/health
+## Características
 
-# Ver logs
-docker logs vllm-voxtral
+- Transcripción en tiempo real via WebSocket
+- Detección automática de idioma
+- Traducción con buffer inteligente (debounce 1.5s + mínimo 10 caracteres nuevos)
+- Selector de idioma destino
+- Limpieza automática al reiniciar grabación
+
+## Estructura del proyecto
+```
+transcriptor-voxtral-nllb/
+├── docker-compose.yml
+├── Dockerfile.vllm
+├── gradio-app/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── app.py
+├── nllb-api/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── server.py
+├── test_realtime.py
+├── test_nllb.py
+└── README.md
 ```
 
-### Error de VRAM
-```bash
-# Reducir utilización de memoria
---gpu-memory-utilization 0.5
+## Códigos de idioma NLLB
 
-# Reducir contexto máximo
---max-model-len 16384
-```
+El servidor NLLB convierte códigos ISO 639-1 a códigos FLORES-200:
 
-## 📜 Licencias
+| Código | NLLB |
+|--------|------|
+| es | spa_Latn |
+| en | eng_Latn |
+| fr | fra_Latn |
+| de | deu_Latn |
+| it | ita_Latn |
+| pt | por_Latn |
+| nl | nld_Latn |
+| ru | rus_Cyrl |
+| zh | zho_Hans |
+| ja | jpn_Jpan |
+| ko | kor_Hang |
+| ar | arb_Arab |
 
-- **Voxtral-Mini-4B**: Apache 2.0 ✅
-- **NLLB-200**: CC-BY-NC-4.0 ⚠️ (solo uso no comercial)
+## Licencia
 
-## 🔗 Referencias
-
-- [Voxtral Model Card](https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602)
-- [NLLB-200 Model Card](https://huggingface.co/facebook/nllb-200-distilled-600M)
-- [vLLM Realtime API](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)
-- [Verda Cloud](https://verda.com)
-
----
-
-**ColoqIALab** - Workshop de IA | Febrero 2026
+MIT
